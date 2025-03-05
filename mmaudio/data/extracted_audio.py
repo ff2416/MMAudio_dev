@@ -35,11 +35,16 @@ class ExtractedAudio(Dataset):
         self.mean = td['mean']
         self.std = td['std']
         self.text_features = td['text_features']
+        rng = torch.Generator(device=self.clip_features.device)
+        rng.manual_seed(42)
+        randn = torch.empty_like(a_mean).normal_(generator=rng)
+        self.audio_features = td['audio_mean'] + td['audio_std'] * randn
 
         log.info(f'Loaded {len(self)} samples from {premade_mmap_dir}.')
         log.info(f'Loaded mean: {self.mean.shape}.')
         log.info(f'Loaded std: {self.std.shape}.')
         log.info(f'Loaded text features: {self.text_features.shape}.')
+        log.info(f'Loaded audio features: {self.audio_features.shape}.')
 
         assert self.mean.shape[1] == self.data_dim['latent_seq_len'], \
             f'{self.mean.shape[1]} != {self.data_dim["latent_seq_len"]}'
@@ -67,6 +72,7 @@ class ExtractedAudio(Dataset):
             'mean': self.mean,
             'std': self.std,
             'text_features': self.text_features,
+            'audio_features': self.audio_features,
         })
         return td
 
@@ -78,6 +84,7 @@ class ExtractedAudio(Dataset):
             'clip_features': self.fake_clip_features,
             'sync_features': self.fake_sync_features,
             'text_features': self.text_features[idx],
+            'audio_features': self.audio_features[idx],
             'caption': self.df_list[idx]['caption'],
             'video_exist': self.video_exist,
             'text_exist': self.text_exist,

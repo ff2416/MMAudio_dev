@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 import torchaudio
 from torch.utils.data.dataset import Dataset
-
+import random
 log = logging.getLogger()
 
 
@@ -32,6 +32,7 @@ class WavTextClipsDataset(Dataset):
         self.normalize_audio = normalize_audio
         self.reject_silent = reject_silent
         self.tokenizer = open_clip.get_tokenizer(tokenizer_id)
+        self.num_timbre_sample = 89088 if sample_rate == 44100 else 32768
 
         audios = sorted(os.listdir(self.root))
         audios = set([
@@ -112,6 +113,8 @@ class WavTextClipsDataset(Dataset):
 
             if audio_chunk.shape[0] < self.num_samples:
                 raise ValueError('Audio is too short')
+            start_index = random.randint(0, self.num_samples - self.num_timbre_sample)
+            timbre_sample = audio_chunk[start_index:start_index + self.num_timbre_sample]
             audio_chunk = audio_chunk[:self.num_samples]
 
             tokens = self.tokenizer([caption])[0]
@@ -121,6 +124,7 @@ class WavTextClipsDataset(Dataset):
                 'id': audio_id,
                 'caption': caption,
                 'tokens': tokens,
+                'timbre_sample': timbre_sample,
             }
 
             return output

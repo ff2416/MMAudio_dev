@@ -26,11 +26,11 @@ local_rank = int(os.environ['LOCAL_RANK'])
 world_size = int(os.environ['WORLD_SIZE'])
 
 # 16k
-SAMPLE_RATE = 16_000
-NUM_SAMPLES = 16_000 * 8
-tod_vae_ckpt = './ext_weights/v1-16.pth'
-bigvgan_vocoder_ckpt = './ext_weights/best_netG.pt'
-mode = '16k'
+# SAMPLE_RATE = 16_000
+# NUM_SAMPLES = 16_000 * 8
+# tod_vae_ckpt = './ext_weights/v1-16.pth'
+# bigvgan_vocoder_ckpt = './ext_weights/best_netG.pt'
+# mode = '16k'
 
 # 44k
 """
@@ -38,11 +38,11 @@ NOTE: 352800 (8*44100) is not divisible by (STFT hop size * VAE downsampling rat
 353280 is the next integer divisible by 1024.
 """
 
-# SAMPLE_RATE = 44100
-# NUM_SAMPLES = 353280
-# tod_vae_ckpt = './ext_weights/v1-44.pth'
-# bigvgan_vocoder_ckpt = None
-# mode = '44k'
+SAMPLE_RATE = 44100
+NUM_SAMPLES = 353280
+tod_vae_ckpt = './ext_weights/v1-44.pth'
+bigvgan_vocoder_ckpt = None
+mode = '44k'
 
 
 def distributed_setup():
@@ -119,6 +119,7 @@ def main():
         ids = batch['id']
         waveforms = batch['waveform'].cuda()
         tokens = batch['tokens'].cuda()
+        timbre_sample = batch['timbre_sample'].cuda()
 
         text_features = clip_model.encode_text(tokens, normalize=True)
         mel = mel_converter(waveforms)
@@ -131,12 +132,21 @@ def main():
         ids = [id for id in ids]
         captions = [caption for caption in batch['caption']]
 
+        mel = mel_converter(timbre_sample)
+        dist = tod.encode(mel)
+
+        audio_feature_mean = dist.mean.detach().cpu().transpose(1, 2)
+        audio_feature_std = dist.std.detach().cpu().transpose(1, 2)
+        print(audio_feature_mean.shape)
+
         data = {
             'id': ids,
             'caption': captions,
             'mean': a_mean,
             'std': a_std,
             'text_features': text_features,
+            'audio_feature_mean': audio_feature_mean,
+            'audio_feature_std': audio_feature_std,
         }
 
         torch.save(data, latent_dir / f'r{local_rank}_{i:05d}.pth')
@@ -151,6 +161,8 @@ def main():
             'mean': [],
             'std': [],
             'text_features': [],
+            'audio_feature_mean': [],
+            'audio_feature_std': [],
         }
 
         latents = sorted(os.listdir(latent_dir))
@@ -167,6 +179,8 @@ def main():
                 output_data['mean'].append(data['mean'][bi])
                 output_data['std'].append(data['std'][bi])
                 output_data['text_features'].append(data['text_features'][bi])
+                output_data['audio_feature_mean'].append(data['audio_feature_mean'][bi])
+                output_data['audio_feature_std'].append(data['audio_feature_std'][bi])
 
         output_df = pd.DataFrame(list_of_ids_and_labels)
         output_dir.mkdir(exist_ok=True, parents=True)

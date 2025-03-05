@@ -11,7 +11,7 @@ from torchvision.transforms import v2
 from torio.io import StreamingMediaDecoder
 
 from mmaudio.utils.dist_utils import local_rank
-
+import random
 log = logging.getLogger()
 
 _CLIP_SIZE = 384
@@ -86,7 +86,7 @@ class VGGSound(Dataset):
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
         ])
-
+        self.num_timbre_sample = 89088 if sample_rate == 44100 else 32768
         self.resampler = {}
 
     def sample(self, idx: int) -> dict[str, torch.Tensor]:
@@ -156,6 +156,8 @@ class VGGSound(Dataset):
         if audio_chunk.shape[0] < self.expected_audio_length:
             raise RuntimeError(f'Audio too short {video_id}')
         audio_chunk = audio_chunk[:self.expected_audio_length]
+        start_index = random.randint(0, self.num_samples - self.num_timbre_sample)
+        timbre_sample = audio_chunk[start_index:start_index + self.num_timbre_sample]
 
         # truncate the video
         clip_chunk = clip_chunk[:self.clip_expected_length]
@@ -178,6 +180,7 @@ class VGGSound(Dataset):
             'audio': audio_chunk,
             'clip_video': clip_chunk,
             'sync_video': sync_chunk,
+            'timbre_sample': timbre_sample
         }
 
         return data

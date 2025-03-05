@@ -145,6 +145,11 @@ def extract():
             output['mean'] = dist.mean.detach().cpu().transpose(1, 2)
             output['std'] = dist.std.detach().cpu().transpose(1, 2)
 
+            timbre_sample = data['timbre_sample'].cuda()
+            dist = feature_extractor.encode_audio(audio)
+            output['audio_feature_mean'] = dist.mean.detach().cpu().transpose(1, 2)
+            output['audio_feature_std'] = dist.std.detach().cpu().transpose(1, 2)
+
             clip_video = data['clip_video'].cuda()
             clip_features = feature_extractor.encode_video_with_clip(clip_video)
             output['clip_features'] = clip_features.detach().cpu()
@@ -173,6 +178,8 @@ def extract():
                 'clip_features': [],
                 'sync_features': [],
                 'text_features': [],
+                'audio_feature_mean': [],
+                'audio_feature_std': [],
             }
 
             for t in tqdm(sorted(os.listdir(this_latent_dir))):
@@ -193,6 +200,8 @@ def extract():
                     output_data['clip_features'].append(data['clip_features'][bi])
                     output_data['sync_features'].append(data['sync_features'][bi])
                     output_data['text_features'].append(data['text_features'][bi])
+                    output_data['audio_feature_mean'].append(data['audio_feature_mean'][bi])
+                    output_data['audio_feature_std'].append(data['audio_feature_std'][bi])
 
             output_dir.mkdir(parents=True, exist_ok=True)
             output_df = pd.DataFrame(list_of_ids_and_labels)

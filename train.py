@@ -57,6 +57,7 @@ def train(cfg: DictConfig):
         cfg.data_dim.latent_seq_len = seq_cfg.latent_seq_len
         cfg.data_dim.clip_seq_len = seq_cfg.clip_seq_len
         cfg.data_dim.sync_seq_len = seq_cfg.sync_seq_len
+        cfg.data_dim.audio_seq_len = seq_cfg.audio_seq_len
 
     # wrap python logger with a tensorboard logger
     log = TensorboardLogger(cfg.exp_id,

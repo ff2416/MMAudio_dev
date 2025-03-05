@@ -37,6 +37,10 @@ class ExtractedVGG(Dataset):
         self.clip_features = td['clip_features']
         self.sync_features = td['sync_features']
         self.text_features = td['text_features']
+        rng = torch.Generator(device=self.clip_features.device)
+        rng.manual_seed(42)
+        randn = torch.empty_like(a_mean).normal_(generator=rng)
+        self.audio_features = td['audio_mean'] + td['audio_std'] * randn
 
         if local_rank == 0:
             log.info(f'Loaded {len(self)} samples.')
@@ -79,6 +83,7 @@ class ExtractedVGG(Dataset):
             'clip_features': self.clip_features,
             'sync_features': self.sync_features,
             'text_features': self.text_features,
+            'audio_features': self.audio_features,
         })
         return td
 
@@ -90,6 +95,7 @@ class ExtractedVGG(Dataset):
             'clip_features': self.clip_features[idx],
             'sync_features': self.sync_features[idx],
             'text_features': self.text_features[idx],
+            'audio_features': self.audio_features[idx],
             'caption': self.df_list[idx]['label'],
             'video_exist': self.video_exist,
             'text_exist': self.text_exist,

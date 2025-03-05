@@ -21,6 +21,8 @@ class PreprocessedConditions:
     text_f: torch.Tensor
     clip_f_c: torch.Tensor
     text_f_c: torch.Tensor
+    audio_f: torch.Tensor  
+    audio_f_c: torch.Tensor  
 
 
 # Partially from https://github.com/facebookresearch/DiT
@@ -41,6 +43,7 @@ class MMAudio(nn.Module):
                  clip_seq_len: int,
                  sync_seq_len: int,
                  text_seq_len: int = 77,
+                 audio_seq_len: int,
                  latent_mean: Optional[torch.Tensor] = None,
                  latent_std: Optional[torch.Tensor] = None,
                  empty_string_feat: Optional[torch.Tensor] = None,
@@ -55,7 +58,7 @@ class MMAudio(nn.Module):
         self._text_seq_len = text_seq_len
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
-
+        self._audio_seq_len = audio_seq_len
         if v2:
             self.audio_input_proj = nn.Sequential(
                 ChannelLastConv1d(latent_dim, hidden_dim, kernel_size=7, padding=3),
@@ -102,10 +105,15 @@ class MMAudio(nn.Module):
                 nn.Linear(text_dim, hidden_dim),
                 MLP(hidden_dim, hidden_dim * 4),
             )
-
+        self.audio_feature_proj = nn.Sequential(  
+            ChannelLastConv1d(latent_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.SiLU() if v2 else nn.SELU(),
+            ConvMLP(hidden_dim, hidden_dim * 4, kernel_size=3, padding=1)
+        )
+        self.audio_cond_proj = nn.Linear(hidden_dim, hidden_dim)
         self.clip_cond_proj = nn.Linear(hidden_dim, hidden_dim)
         self.text_cond_proj = nn.Linear(hidden_dim, hidden_dim)
-        self.global_cond_mlp = MLP(hidden_dim, hidden_dim * 4)
+        self.global_cond_mlp = MLP(hidden_dim * 2, hidden_dim * 4)
         # each synchformer output segment has 8 feature frames
         self.sync_pos_emb = nn.Parameter(torch.zeros((1, 1, 8, sync_dim)))
 
@@ -148,6 +156,7 @@ class MMAudio(nn.Module):
         self.empty_string_feat = nn.Parameter(empty_string_feat, requires_grad=False)
         self.empty_clip_feat = nn.Parameter(torch.zeros(1, clip_dim), requires_grad=True)
         self.empty_sync_feat = nn.Parameter(torch.zeros(1, sync_dim), requires_grad=True)
+        self.empty_audio_feat = nn.Parameter(torch.zeros(1, latent_dim), requires_grad=True)
 
         self.initialize_weights()
         self.initialize_rotations()
@@ -211,7 +220,8 @@ class MMAudio(nn.Module):
         nn.init.constant_(self.sync_pos_emb, 0)
         nn.init.constant_(self.empty_clip_feat, 0)
         nn.init.constant_(self.empty_sync_feat, 0)
-
+        nn.init.normal_(self.empty_audio_feat, std=0.02)
+        
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
         # return (x - self.latent_mean) / self.latent_std
         return x.sub_(self.latent_mean).div_(self.latent_std)
@@ -221,7 +231,7 @@ class MMAudio(nn.Module):
         return x.mul_(self.latent_std).add_(self.latent_mean)
 
     def preprocess_conditions(self, clip_f: torch.Tensor, sync_f: torch.Tensor,
-                              text_f: torch.Tensor) -> PreprocessedConditions:
+                              text_f: torch.Tensor, audio_f: torch.Tensor) -> PreprocessedConditions:
         """
         cache computations that do not depend on the latent/time step
         i.e., the features are reused over steps during inference
@@ -229,7 +239,7 @@ class MMAudio(nn.Module):
         assert clip_f.shape[1] == self._clip_seq_len, f'{clip_f.shape=} {self._clip_seq_len=}'
         assert sync_f.shape[1] == self._sync_seq_len, f'{sync_f.shape=} {self._sync_seq_len=}'
         assert text_f.shape[1] == self._text_seq_len, f'{text_f.shape=} {self._text_seq_len=}'
-
+        assert audio_f.shape[1] == self._audio_seq_len, f'{audio_f.shape=} {self._audio_seq_len=}'
         bs = clip_f.shape[0]
 
         # B * num_segments (24) * 8 * 768
@@ -241,6 +251,7 @@ class MMAudio(nn.Module):
         clip_f = self.clip_input_proj(clip_f)  # (B, VN, D)
         sync_f = self.sync_input_proj(sync_f)  # (B, VN, D)
         text_f = self.text_input_proj(text_f)  # (B, VN, D)
+        audio_f = self.audio_feature_proj(audio_f)
 
         # upsample the sync features to match the audio
         sync_f = sync_f.transpose(1, 2)  # (B, D, VN)
@@ -250,12 +261,15 @@ class MMAudio(nn.Module):
         # get conditional features from the clip side
         clip_f_c = self.clip_cond_proj(clip_f.mean(dim=1))  # (B, D)
         text_f_c = self.text_cond_proj(text_f.mean(dim=1))  # (B, D)
+        audio_f_c = self.audio_cond_proj(audio_f.mean(dim=1))
 
         return PreprocessedConditions(clip_f=clip_f,
                                       sync_f=sync_f,
                                       text_f=text_f,
                                       clip_f_c=clip_f_c,
-                                      text_f_c=text_f_c)
+                                      text_f_c=text_f_c,
+                                      audio_f_c=audio_f_c,
+                                      audio_f=audio_f)
 
     def predict_flow(self, latent: torch.Tensor, t: torch.Tensor,
                      conditions: PreprocessedConditions) -> torch.Tensor:
@@ -269,9 +283,12 @@ class MMAudio(nn.Module):
         text_f = conditions.text_f
         clip_f_c = conditions.clip_f_c
         text_f_c = conditions.text_f_c
+        audio_f = conditions.audio_f
+        audio_f_c = conditions.audio_f_c
 
         latent = self.audio_input_proj(latent)  # (B, N, D)
-        global_c = self.global_cond_mlp(clip_f_c + text_f_c)  # (B, D)
+        semantic_c = clip_f_c + text_f_c
+        global_c = self.global_cond_mlp([semantic_c, audio_f_c], dim=-1)  # (B, D)
 
         global_c = self.t_embed(t).unsqueeze(1) + global_c.unsqueeze(1)  # (B, D)
         extended_c = global_c + sync_f
@@ -287,13 +304,13 @@ class MMAudio(nn.Module):
         return flow
 
     def forward(self, latent: torch.Tensor, clip_f: torch.Tensor, sync_f: torch.Tensor,
-                text_f: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+                text_f: torch.Tensor, audio_f: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
         latent: (B, N, C) 
         vf: (B, T, C_V)
         t: (B,)
         """
-        conditions = self.preprocess_conditions(clip_f, sync_f, text_f)
+        conditions = self.preprocess_conditions(clip_f, sync_f, text_f, audio_f)
         flow = self.predict_flow(latent, t, conditions)
         return flow
 
@@ -305,6 +322,9 @@ class MMAudio(nn.Module):
 
     def get_empty_sync_sequence(self, bs: int) -> torch.Tensor:
         return self.empty_sync_feat.unsqueeze(0).expand(bs, self._sync_seq_len, -1)
+
+    def get_empty_audio_sequence(self, bs: int) -> torch.Tensor:
+        return self.empty_audio_feat.unsqueeze(0).expand(bs, self._audio_seq_len, -1)
 
     def get_empty_conditions(
             self,
@@ -318,10 +338,13 @@ class MMAudio(nn.Module):
 
         empty_clip = self.get_empty_clip_sequence(1)
         empty_sync = self.get_empty_sync_sequence(1)
-        conditions = self.preprocess_conditions(empty_clip, empty_sync, empty_text)
+        empty_audio = self.get_empty_audio_sequence(1)
+        conditions = self.preprocess_conditions(empty_clip, empty_sync, empty_text, empty_audio)
         conditions.clip_f = conditions.clip_f.expand(bs, -1, -1)
         conditions.sync_f = conditions.sync_f.expand(bs, -1, -1)
         conditions.clip_f_c = conditions.clip_f_c.expand(bs, -1)
+        comdition.audio_f = conditions.audio_f.expand(bs, -1, -1)
+        conditions.audio_f_c = conditions.audio_f_c.expand(bs, -1)
         if negative_text_features is None:
             conditions.text_f = conditions.text_f.expand(bs, -1, -1)
             conditions.text_f_c = conditions.text_f_c.expand(bs, -1)
@@ -378,6 +401,7 @@ def small_16k(**kwargs) -> MMAudio:
                    latent_seq_len=250,
                    clip_seq_len=64,
                    sync_seq_len=192,
+                   audio_seq_len=63,
                    **kwargs)
 
 
@@ -394,6 +418,7 @@ def small_44k(**kwargs) -> MMAudio:
                    latent_seq_len=345,
                    clip_seq_len=64,
                    sync_seq_len=192,
+                   audio_seq_len=87,
                    **kwargs)
 
 
@@ -410,6 +435,7 @@ def medium_44k(**kwargs) -> MMAudio:
                    latent_seq_len=345,
                    clip_seq_len=64,
                    sync_seq_len=192,
+                   audio_seq_len=87,
                    **kwargs)
 
 
@@ -426,6 +452,7 @@ def large_44k(**kwargs) -> MMAudio:
                    latent_seq_len=345,
                    clip_seq_len=64,
                    sync_seq_len=192,
+                   audio_seq_len=87,
                    **kwargs)
 
 
@@ -442,6 +469,7 @@ def large_44k_v2(**kwargs) -> MMAudio:
                    latent_seq_len=345,
                    clip_seq_len=64,
                    sync_seq_len=192,
+                   audio_seq_len=87,
                    v2=True,
                    **kwargs)
 

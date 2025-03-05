@@ -205,6 +205,7 @@ class Runner:
         clip_f: torch.Tensor,
         sync_f: torch.Tensor,
         text_f: torch.Tensor,
+        audio_f: torch.Tensor,
         a_mean: torch.Tensor,
         a_std: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -235,7 +236,11 @@ class Runner:
         null_text = (samples < self.null_condition_probability)
         text_f[null_text] = self.network.module.empty_string_feat
 
-        pred_v = self.network(xt, clip_f, sync_f, text_f, t)
+        samples = torch.rand(bs, device=x1.device, generator=self.rng)
+        null_audio = (samples < self.null_condition_probability)
+        audio_f[null_audio] = self.network.module.empty_audio_feat
+
+        pred_v = self.network(xt, clip_f, sync_f, text_f, audio_f, t)
         loss = self.fm.loss(pred_v, x0, x1)
         mean_loss = loss.mean()
         return x1, loss, mean_loss, t
@@ -245,6 +250,7 @@ class Runner:
         clip_f: torch.Tensor,
         sync_f: torch.Tensor,
         text_f: torch.Tensor,
+        audio_f: torch.Tensor
         x1: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         bs = x1.shape[0]  # batch_size * seq_len * num_channels
@@ -271,11 +277,14 @@ class Runner:
         null_text = (samples < self.null_condition_probability)
         text_f[null_text] = self.network.module.empty_string_feat
 
-        pred_v = self.network(xt, clip_f, sync_f, text_f, t)
+        samples = torch.rand(bs, device=x1.device, generator=self.rng)
+        null_audio = (samples < self.null_condition_probability)
+        audio_f[null_audio] = self.network.module.empty_audio_feat
 
+        pred_v = self.network(xt, clip_f, sync_f, text_f, audio_f, t)
         loss = self.fm.loss(pred_v, x0, x1)
         mean_loss = loss.mean()
-        return loss, mean_loss, t
+        return x1, loss, mean_loss, t
 
     def train_pass(self, data, it: int = 0):
 
@@ -287,6 +296,8 @@ class Runner:
             clip_f = data['clip_features'].cuda(non_blocking=True)
             sync_f = data['sync_features'].cuda(non_blocking=True)
             text_f = data['text_features'].cuda(non_blocking=True)
+            audio_f = data['audio_features'].cuda(non_blocking=True)  
+            audio_exist = data['audio_exist'].cuda(non_blocking=True)
             video_exist = data['video_exist'].cuda(non_blocking=True)
             text_exist = data['text_exist'].cuda(non_blocking=True)
             a_mean = data['a_mean'].cuda(non_blocking=True)
@@ -296,13 +307,15 @@ class Runner:
             clip_f[~video_exist] = self.network.module.empty_clip_feat
             sync_f[~video_exist] = self.network.module.empty_sync_feat
             text_f[~text_exist] = self.network.module.empty_string_feat
+            audio_f[~audio_exist] = self.network.module.empty_audio_feat
 
             self.log.data_timer.end()
             if it % self.log_extra_interval == 0:
                 unmasked_clip_f = clip_f.clone()
                 unmasked_sync_f = sync_f.clone()
                 unmasked_text_f = text_f.clone()
-            x1, loss, mean_loss, t = self.train_fn(clip_f, sync_f, text_f, a_mean, a_std)
+                unmasked_audio_f = audio_f.clone()
+            x1, loss, mean_loss, t = self.train_fn(clip_f, sync_f, text_f, audio_f, a_mean, a_std)
 
             self.train_integrator.add_dict({'loss': mean_loss})
 
@@ -354,7 +367,8 @@ class Runner:
                     clip_f = unmasked_clip_f[0:1]
                     sync_f = unmasked_sync_f[0:1]
                     text_f = unmasked_text_f[0:1]
-                    conditions = self.network.module.preprocess_conditions(clip_f, sync_f, text_f)
+                    audio_f = unmasked_audio_f[0:1]
+                    conditions = self.network.module.preprocess_conditions(clip_f, sync_f, text_f, audio_f)
                     empty_conditions = self.network.module.get_empty_conditions(x0.shape[0])
                     cfg_ode_wrapper = lambda t, x: self.network.module.ode_wrapper(
                         t, x, conditions, empty_conditions, self.cfg_strength)
@@ -391,6 +405,8 @@ class Runner:
             clip_f = data['clip_features'].cuda(non_blocking=True)
             sync_f = data['sync_features'].cuda(non_blocking=True)
             text_f = data['text_features'].cuda(non_blocking=True)
+            audio_f = data['audio_features'].cuda(non_blocking=True)  
+            audio_exist = data['audio_exist'].cuda(non_blocking=True)
             video_exist = data['video_exist'].cuda(non_blocking=True)
             text_exist = data['text_exist'].cuda(non_blocking=True)
             a_mean = data['a_mean'].cuda(non_blocking=True)
@@ -399,11 +415,12 @@ class Runner:
             clip_f[~video_exist] = self.network.module.empty_clip_feat
             sync_f[~video_exist] = self.network.module.empty_sync_feat
             text_f[~text_exist] = self.network.module.empty_string_feat
+            audio_f[~audio_exist] = self.network.module.empty_audio_feat
             a_randn = torch.empty_like(a_mean).normal_(generator=self.rng)
             x1 = a_mean + a_std * a_randn
 
             self.log.data_timer.end()
-            loss, mean_loss, t = self.val_fn(clip_f.clone(), sync_f.clone(), text_f.clone(), x1)
+            loss, mean_loss, t = self.val_fn(clip_f.clone(), sync_f.clone(), text_f.clone(), audio_f.clone(), x1)
 
             self.val_integrator.add_binned_tensor('binned_loss', loss, t)
             self.val_integrator.add_dict({'loss': mean_loss})
@@ -422,6 +439,8 @@ class Runner:
             clip_f = data['clip_features'].cuda(non_blocking=True)
             sync_f = data['sync_features'].cuda(non_blocking=True)
             text_f = data['text_features'].cuda(non_blocking=True)
+            audio_f = data['audio_features'].cuda(non_blocking=True)  
+            audio_exist = data['audio_exist'].cuda(non_blocking=True)
             video_exist = data['video_exist'].cuda(non_blocking=True)
             text_exist = data['text_exist'].cuda(non_blocking=True)
             a_mean = data['a_mean'].cuda(non_blocking=True)  # for the shape only
@@ -429,10 +448,11 @@ class Runner:
             clip_f[~video_exist] = self.network.module.empty_clip_feat
             sync_f[~video_exist] = self.network.module.empty_sync_feat
             text_f[~text_exist] = self.network.module.empty_string_feat
+            audio_f[~audio_exist] = self.network.module.empty_audio_feat
 
             # sample
             x0 = torch.empty_like(a_mean).normal_(generator=self.rng)
-            conditions = self.network.module.preprocess_conditions(clip_f, sync_f, text_f)
+            conditions = self.network.module.preprocess_conditions(clip_f, sync_f, text_f, audio_f)
             empty_conditions = self.network.module.get_empty_conditions(x0.shape[0])
             cfg_ode_wrapper = lambda t, x: self.network.module.ode_wrapper(
                 t, x, conditions, empty_conditions, self.cfg_strength)
