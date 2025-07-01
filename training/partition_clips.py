@@ -6,7 +6,7 @@ import pandas as pd
 import torchaudio
 from tqdm import tqdm
 
-min_length_sec = 10.1
+min_length_sec = 10.0
 max_segments_per_clip = 5
 
 parser = argparse.ArgumentParser(description='Process audio clips.')
