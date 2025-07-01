@@ -9,9 +9,9 @@ import torch
 from torch.utils.data.dataset import Dataset
 from torchvision.transforms import v2
 from torio.io import StreamingMediaDecoder
-
+import torchaudio
 from mmaudio.utils.dist_utils import local_rank
-
+import random
 log = logging.getLogger()
 
 _CLIP_SIZE = 384
@@ -32,7 +32,9 @@ class VideoDataset(Dataset):
         self.video_root = Path(video_root)
 
         self.duration_sec = duration_sec
-
+        self.sample_rate = 44100
+        self.resampler = {}
+        self.expected_audio_length = 89088
         self.clip_expected_length = int(_CLIP_FPS * self.duration_sec)
         self.sync_expected_length = int(_SYNC_FPS * self.duration_sec)
 
@@ -69,12 +71,15 @@ class VideoDataset(Dataset):
             frame_rate=_SYNC_FPS,
             format='rgb24',
         )
+        reader.add_basic_audio_stream(frames_per_chunk=2**30, )
 
         reader.fill_buffer()
         data_chunk = reader.pop_chunks()
 
         clip_chunk = data_chunk[0]
         sync_chunk = data_chunk[1]
+        audio_chunk = data_chunk[2]
+        
         if clip_chunk is None:
             raise RuntimeError(f'CLIP video returned None {video_id}')
         if clip_chunk.shape[0] < self.clip_expected_length:
@@ -88,6 +93,34 @@ class VideoDataset(Dataset):
             raise RuntimeError(
                 f'Sync video too short {video_id}, expected {self.sync_expected_length}, got {sync_chunk.shape[0]}'
             )
+
+         # process audio
+        sample_rate = int(reader.get_out_stream_info(2).sample_rate)
+        audio_chunk = audio_chunk.transpose(0, 1)
+        audio_chunk = audio_chunk.mean(dim=0)  # mono
+        abs_max = audio_chunk.abs().max()
+        audio_chunk = audio_chunk / abs_max * 0.95
+
+        # resample
+        if sample_rate == self.sample_rate:
+            audio_chunk = audio_chunk
+        else:
+            if sample_rate not in self.resampler:
+                # https://pytorch.org/audio/stable/tutorials/audio_resampling_tutorial.html#kaiser-best
+                self.resampler[sample_rate] = torchaudio.transforms.Resample(
+                    sample_rate,
+                    self.sample_rate,
+                    lowpass_filter_width=64,
+                    rolloff=0.9475937167399596,
+                    resampling_method='sinc_interp_kaiser',
+                    beta=14.769656459379492,
+                )
+            audio_chunk = self.resampler[sample_rate](audio_chunk)
+
+        if audio_chunk.shape[0] < self.expected_audio_length:
+            raise RuntimeError(f'Audio too short {video_id}')
+        # start_index = random.randint(0, audio_chunk.shape[0] - self.expected_audio_length)
+        timbre_sample = audio_chunk[audio_chunk.shape[0]-self.expected_audio_length:] 
 
         # truncate the video
         clip_chunk = clip_chunk[:self.clip_expected_length]
@@ -109,6 +142,7 @@ class VideoDataset(Dataset):
             'caption': caption,
             'clip_video': clip_chunk,
             'sync_video': sync_chunk,
+            'audio': timbre_sample
         }
 
         return data

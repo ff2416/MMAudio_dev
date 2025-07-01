@@ -57,10 +57,11 @@ def setup_training_datasets(cfg: DictConfig) -> tuple[Dataset, DistributedSample
         vgg = load_vgg_data(cfg, cfg.data.ExtractedVGG)
         audiocaps = load_audio_data(cfg, cfg.data.AudioCaps)
         audioset_sl = load_audio_data(cfg, cfg.data.AudioSetSL)
-        bbcsound = load_audio_data(cfg, cfg.data.BBCSound)
-        clotho = load_audio_data(cfg, cfg.data.Clotho)
+        # bbcsound = load_audio_data(cfg, cfg.data.BBCSound)
+        # clotho = load_audio_data(cfg, cfg.data.Clotho)
         dataset = MultiModalDataset([vgg] * cfg.vgg_oversample_rate,
-                                    [audiocaps, audioset_sl, bbcsound, freesound, clotho])
+                                    [audiocaps, audioset_sl, freesound])
+        # dataset = MultiModalDataset([vgg],[])
 
     batch_size = cfg.batch_size
     num_workers = cfg.num_workers

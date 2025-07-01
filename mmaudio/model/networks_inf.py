@@ -262,7 +262,7 @@ class MMAudio(nn.Module):
         # get conditional features from the clip side
         clip_f_c = self.clip_cond_proj(clip_f.mean(dim=1))  # (B, D)
         text_f_c = self.text_cond_proj(text_f.mean(dim=1))  # (B, D)
-        audio_f_c = self.audio_cond_proj(audio_f.mean(dim=1))
+        audio_f_c = self.audio_cond_proj(audio_f.mean(dim=1)) # (B, D)
 
         return PreprocessedConditions(clip_f=clip_f,
                                       sync_f=sync_f,

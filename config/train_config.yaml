@@ -15,7 +15,7 @@ ema:
 mini_train: False
 example_train: False
 enable_grad_scaler: False
-vgg_oversample_rate: 5
+vgg_oversample_rate: 4
 
 log_text_interval: 200
 log_extra_interval: 20_000
@@ -24,17 +24,17 @@ eval_interval: 20_000
 save_eval_interval: 40_000
 save_weights_interval: 10_000
 save_checkpoint_interval: 10_000
-save_copy_iterations: []
+save_copy_iterations: [100000,150000,200000,220000,240000,260000,280000,300000]
 
-batch_size: 512
-eval_batch_size: 256 # per-GPU
+batch_size: 320
+eval_batch_size: 32 # per-GPU
 
 num_iterations: 300_000
 learning_rate: 1.0e-4
 linear_warmup_steps: 1_000
 
 lr_schedule: step
-lr_schedule_steps: [240_000, 270_000]
+lr_schedule_steps: [200_000, 240_000, 270_000]
 lr_schedule_gamma: 0.1
 
 clip_grad_norm: 1.0

@@ -1,6 +1,7 @@
 import logging
 import os
 from argparse import ArgumentParser
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -10,20 +11,19 @@ import torch.distributed as distributed
 import torch.nn.functional as F
 from open_clip import create_model_from_pretrained
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from mmaudio.data.data_setup import error_avoidance_collate
 from mmaudio.data.extraction.wav_dataset import WavTextClipsDataset
 from mmaudio.ext.autoencoder import AutoEncoderModule
 from mmaudio.ext.mel_converter import get_mel_converter
+from mmaudio.utils.dist_utils import local_rank, world_size
 
 log = logging.getLogger()
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-
-local_rank = int(os.environ['LOCAL_RANK'])
-world_size = int(os.environ['WORLD_SIZE'])
 
 # 16k
 # SAMPLE_RATE = 16_000
@@ -46,10 +46,8 @@ mode = '44k'
 
 
 def distributed_setup():
-    distributed.init_process_group(backend="nccl")
-    local_rank = distributed.get_rank()
-    world_size = distributed.get_world_size()
-    print(f'Initialized: local_rank={local_rank}, world_size={world_size}')
+    distributed.init_process_group(backend="nccl", timeout=timedelta(hours=1))
+    log.info(f'Initialized: local_rank={local_rank}, world_size={world_size}')
     return local_rank, world_size
 
 
@@ -79,6 +77,8 @@ def main():
     batch_size = args.batch_size
     num_workers = args.num_workers
 
+    # cuda setup
+    torch.cuda.set_device(local_rank)
     clip_model = create_model_from_pretrained('hf-hub:apple/DFN5B-CLIP-ViT-H-14-384',
                                               return_transform=False).eval().cuda()
 
@@ -106,11 +106,14 @@ def main():
                                   sample_rate=SAMPLE_RATE,
                                   num_samples=NUM_SAMPLES,
                                   normalize_audio=True,
-                                  reject_silent=True)
+                                  reject_silent=True
+    )
+    sampler = DistributedSampler(dataset, rank=local_rank, shuffle=False)
     dataloader = DataLoader(dataset,
                             batch_size=batch_size,
-                            shuffle=False,
                             num_workers=num_workers,
+                            sampler=sampler,
+                            drop_last=False,
                             collate_fn=error_avoidance_collate)
     latent_dir.mkdir(exist_ok=True, parents=True)
 
@@ -137,7 +140,7 @@ def main():
 
         audio_feature_mean = dist.mean.detach().cpu().transpose(1, 2)
         audio_feature_std = dist.std.detach().cpu().transpose(1, 2)
-        print(audio_feature_mean.shape)
+        # print(audio_feature_mean.shape)
 
         data = {
             'id': ids,

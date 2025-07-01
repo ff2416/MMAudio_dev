@@ -38,17 +38,17 @@ def main(cfg: DictConfig):
 
     run_dir = Path(HydraConfig.get().run.dir)
     if cfg.output_name is None:
-        output_dir = run_dir / cfg.dataset
+        output_dir = run_dir / f'{cfg.dataset}_random2_finetune_noaudio'
     else:
-        output_dir = run_dir / f'{cfg.dataset}-{cfg.output_name}'
+        output_dir = run_dir / f'{cfg.dataset}-{cfg.output_name}1'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # load a pretrained model
     seq_cfg.duration = cfg.duration_s
     net: MMAudio = get_my_mmaudio(cfg.model).to(device).eval()
-    net.load_weights(torch.load(model.model_path, map_location=device, weights_only=True))
+    net.load_weights(torch.load('/project/llmsvgen/pengjun/MMAudio_dev/output/random2_finetune_global/random2_finetune_global_ckpt_280000.pth', map_location=device, weights_only=True)['weights'])
     log.info(f'Loaded weights from {model.model_path}')
-    net.update_seq_lengths(seq_cfg.latent_seq_len, seq_cfg.clip_seq_len, seq_cfg.sync_seq_len)
+    net.update_seq_lengths(seq_cfg.latent_seq_len, seq_cfg.clip_seq_len, seq_cfg.sync_seq_len, seq_cfg.audio_seq_len)
     log.info(f'Latent seq len: {seq_cfg.latent_seq_len}')
     log.info(f'Clip seq len: {seq_cfg.clip_seq_len}')
     log.info(f'Sync seq len: {seq_cfg.sync_seq_len}')
@@ -65,7 +65,7 @@ def main(cfg: DictConfig):
                                   enable_conditions=True,
                                   mode=model.mode,
                                   bigvgan_vocoder_ckpt=model.bigvgan_16k_path,
-                                  need_vae_encoder=False)
+                                  need_vae_encoder=True)
     feature_utils = feature_utils.to(device).eval()
 
     if cfg.compile:
@@ -80,6 +80,8 @@ def main(cfg: DictConfig):
             audios = generate(batch.get('clip_video', None),
                               batch.get('sync_video', None),
                               batch.get('caption', None),
+                            #   batch.get('audio', None),
+                            None,
                               feature_utils=feature_utils,
                               net=net,
                               fm=fm,

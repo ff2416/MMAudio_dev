@@ -113,9 +113,8 @@ class WavTextClipsDataset(Dataset):
 
             if audio_chunk.shape[0] < self.num_samples:
                 raise ValueError('Audio is too short')
-            start_index = random.randint(0, self.num_samples - self.num_timbre_sample)
-            timbre_sample = audio_chunk[start_index:start_index + self.num_timbre_sample]
-            audio_chunk = audio_chunk[:self.num_samples]
+            timbre_sample = audio_chunk[:self.num_timbre_sample]
+            audio_chunk = audio_chunk[audio_chunk.shape[0]-self.num_samples:]
 
             tokens = self.tokenizer([caption])[0]
 

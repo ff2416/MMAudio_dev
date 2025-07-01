@@ -38,9 +38,9 @@ class ExtractedVGG(Dataset):
         self.sync_features = td['sync_features']
         self.text_features = td['text_features']
         rng = torch.Generator(device=self.clip_features.device)
-        rng.manual_seed(42)
-        randn = torch.empty_like(a_mean).normal_(generator=rng)
-        self.audio_features = td['audio_mean'] + td['audio_std'] * randn
+        rng.manual_seed(14159265)
+        randn = torch.empty_like(td['audio_feature_mean']).normal_(generator=rng)
+        self.audio_features = td['audio_feature_mean'] + td['audio_feature_std'] * randn
 
         if local_rank == 0:
             log.info(f'Loaded {len(self)} samples.')
@@ -71,6 +71,7 @@ class ExtractedVGG(Dataset):
 
         self.video_exist = torch.tensor(1, dtype=torch.bool)
         self.text_exist = torch.tensor(1, dtype=torch.bool)
+        self.audio_exist = torch.tensor(1, dtype=torch.bool)
 
     def compute_latent_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         latents = self.mean
@@ -99,6 +100,7 @@ class ExtractedVGG(Dataset):
             'caption': self.df_list[idx]['label'],
             'video_exist': self.video_exist,
             'text_exist': self.text_exist,
+            'audio_exist': self.audio_exist,
         }
 
         return data

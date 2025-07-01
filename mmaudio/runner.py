@@ -14,7 +14,7 @@ from av_bench.extract import extract
 from nitrous_ema import PostHocEMA
 from omegaconf import DictConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+import torch.nn as nn
 from mmaudio.model.flow_matching import FlowMatching
 from mmaudio.model.networks import get_my_mmaudio
 from mmaudio.model.sequence_config import CONFIG_16K, CONFIG_44K
@@ -250,7 +250,7 @@ class Runner:
         clip_f: torch.Tensor,
         sync_f: torch.Tensor,
         text_f: torch.Tensor,
-        audio_f: torch.Tensor
+        audio_f: torch.Tensor,
         x1: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         bs = x1.shape[0]  # batch_size * seq_len * num_channels
@@ -420,7 +420,7 @@ class Runner:
             x1 = a_mean + a_std * a_randn
 
             self.log.data_timer.end()
-            loss, mean_loss, t = self.val_fn(clip_f.clone(), sync_f.clone(), text_f.clone(), audio_f.clone(), x1)
+            x1, loss, mean_loss, t = self.val_fn(clip_f.clone(), sync_f.clone(), text_f.clone(), audio_f.clone(), x1)
 
             self.val_integrator.add_binned_tensor('binned_loss', loss, t)
             self.val_integrator.add_dict({'loss': mean_loss})
@@ -459,6 +459,7 @@ class Runner:
             x1_hat = self.fm.to_data(cfg_ode_wrapper, x0)
             x1_hat = self.network.module.unnormalize(x1_hat)
             mel = self.features.decode(x1_hat)
+            # print("Mel shape:", mel.shape)
             audio = self.features.vocode(mel).cpu()
             for i in range(audio.shape[0]):
                 video_id = data['id'][i]
@@ -601,6 +602,170 @@ class Runner:
 
         self.log.info(f'Global iteration {it} loaded.')
         self.log.info('Network weights, optimizer states, and scheduler states loaded.')
+
+        return it
+        
+    def load_checkpoint_original(self, path):
+        # This method loads everything and should be used to resume training
+        map_location = f'cuda:{local_rank}'
+        checkpoint = torch.load(path, map_location={'cuda:0': map_location}, weights_only=True)
+        
+        it = checkpoint['it']
+        # ==================== 网络参数加载 ====================
+        current_state = self.network.module.state_dict()
+        pretrained_state = checkpoint['weights']
+        
+        # 1. 过滤不需要的键（latent_rot和clip_rot）
+        filtered_pretrained = {k: v for k, v in pretrained_state.items()
+                            if k not in ['latent_rot', 'clip_rot']}
+        
+        # 2. 处理global_cond_mlp的维度扩展
+        mlp_mapping = {
+            'global_cond_mlp.w1.weight': (1792, 896),  # (current_dim, pretrained_dim)
+            'global_cond_mlp.w2.weight': (1792, 896),
+            'global_cond_mlp.w3.weight': (1792, 896)
+        }
+        
+        # 3. 参数加载策略
+        matched_state = {}
+        for k in current_state:
+            if k in filtered_pretrained:
+                # 处理特殊维度扩展
+                if k in mlp_mapping:
+                    current_dim, pretrained_dim = mlp_mapping[k]
+                    pretrained_weight = filtered_pretrained[k]
+                    
+                    # 旧维度部分复制
+                    if 'w1' in k or 'w3' in k:  # 输入维度扩展
+                        new_weight = torch.zeros(current_state[k].shape)
+                        new_weight[:, :pretrained_dim] = pretrained_weight
+                    elif 'w2' in k:  # 输出维度扩展
+                        new_weight = torch.zeros(current_state[k].shape)
+                        new_weight[:pretrained_dim, :] = pretrained_weight
+                    
+                    # 新增部分初始化
+                    nn.init.xavier_uniform_(new_weight[:, pretrained_dim:])
+                    matched_state[k] = new_weight
+                    self.log.info(f'Adaptively loaded {k} with dim expansion')
+                else:
+                    # 常规匹配
+                    if current_state[k].shape == filtered_pretrained[k].shape:
+                        matched_state[k] = filtered_pretrained[k]
+                    else:
+                        self.log.warning(f'Shape mismatch for {k}, skipped')
+            else:
+                # 初始化新增音频相关参数
+                if 'audio_' in k:
+                    if 'empty_audio_feat' in k:
+                        nn.init.constant_(current_state[k], 0)
+                    elif 'audio_cond_proj' in k:
+                        if 'weight' in k:
+                            nn.init.xavier_uniform_(current_state[k])
+                        else:
+                            nn.init.zeros_(current_state[k])
+                    elif 'audio_feature_proj' in k:
+                        if '0.weight' in k:  # Conv1d层
+                            nn.init.kaiming_normal_(current_state[k], 
+                                                mode='fan_in', 
+                                                nonlinearity='selu')
+                        elif '0.bias' in k:
+                            nn.init.zeros_(current_state[k])
+                        else:  # ConvMLP层
+                            nn.init.xavier_uniform_(current_state[k])
+                    self.log.info(f'Initialized new param: {k}')
+        
+        # 4. 加载处理后的参数
+        self.network.module.load_state_dict(matched_state, strict=False)
+        
+        # ==================== 优化器加载 ====================
+        optimizer_state = checkpoint['optimizer']
+        # 构建新的优化器状态字典
+        new_optimizer_state = {
+            'state': {},
+            'param_groups': []
+        }
+
+        # 步骤1：重建参数组并收集有效参数ID映射
+        id_mapping = {}  # 旧参数ID -> 新参数对象
+        for old_group in optimizer_state['param_groups']:
+            valid_params = []
+            for old_pid in old_group['params']:
+                # 通过参数名匹配找到对应的新参数
+                param_name = next(
+                    (name for name, param in self.network.module.named_parameters()
+                    if id(param) == old_pid), None)
+                
+                if param_name and param_name in current_state:
+                    new_param = self.network.module.state_dict()[param_name]
+                    id_mapping[old_pid] = id(new_param)  # 记录新旧ID映射
+                    valid_params.append(id(new_param))
+            
+            if valid_params:
+                new_group = {**old_group, 'params': valid_params}
+                new_optimizer_state['param_groups'].append(new_group)
+
+        # 步骤2：重建state字典
+        for old_pid, state in optimizer_state['state'].items():
+            if old_pid in id_mapping:
+                new_pid = id_mapping[old_pid]
+                new_optimizer_state['state'][new_pid] = state
+
+        # 步骤3：尝试加载完整优化器状态
+        if new_optimizer_state['param_groups']:
+            try:
+                self.optimizer.load_state_dict(new_optimizer_state)
+            except Exception as e:
+                self.log.warning(f'Optimizer loading failed: {str(e)}, reinitializing')
+                # 失败时初始化基础参数组（保持原有逻辑）
+                self.optimizer.param_groups = [
+                    {**g, 'params': [p for p in g['params'] if p in id_mapping.values()]} 
+                    for g in self.optimizer.param_groups
+                ]
+        
+        # 强制设置学习率为1e-5
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = 1e-4
+        # ==================== EMA加载 ====================
+        if self.ema is not None and checkpoint.get('ema', None) is not None:
+            ema_state = checkpoint['ema']
+            
+            # 过滤无效键
+            filtered_ema = {k: v for k, v in ema_state.items() 
+                        if k not in ['latent_rot', 'clip_rot']}
+            
+            # 处理维度扩展
+            for k in mlp_mapping:
+                if k in filtered_ema:
+                    current_dim, pretrained_dim = mlp_mapping[k]
+                    pretrained_ema = filtered_ema[k]
+                    
+                    # 与主网络相同的扩展逻辑
+                    if 'w1' in k or 'w3' in k:
+                        new_ema = torch.zeros(current_state[k].shape)
+                        new_ema[:, :pretrained_dim] = pretrained_ema
+                    elif 'w2' in k:
+                        new_ema = torch.zeros(current_state[k].shape)
+                        new_ema[:pretrained_dim, :] = pretrained_ema
+                    
+                    # 新增部分使用当前参数值初始化EMA
+                    new_ema[:, pretrained_dim:] = current_state[k][:, pretrained_dim:].detach()
+                    filtered_ema[k] = new_ema
+            
+            # 加载EMA状态
+            self.ema.shadow = filtered_ema
+        
+        # ==================== 日志记录 ====================
+        missing = set(current_state.keys()) - set(matched_state.keys())
+        unexpected = set(filtered_pretrained.keys()) - set(current_state.keys())
+        
+        self.log.info(f'Successfully loaded {len(matched_state)}/{len(current_state)} params')
+        self.log.info(f'Missing keys: {sorted(missing)}')
+        self.log.info(f'Unexpected keys: {sorted(unexpected)}')
+        self.log.info(f'global_cond_mlp dimension expanded from 896 to 1792')
+        
+        # ==================== 其他状态 ====================
+        self.scheduler.load_state_dict(checkpoint['scheduler'])
+        self.log.info(f'Resumed training from iteration {checkpoint["it"]}')
 
         return it
 

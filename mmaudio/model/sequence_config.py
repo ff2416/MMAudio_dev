@@ -10,6 +10,7 @@ class SequenceConfig:
     # audio
     sampling_rate: int
     spectrogram_frame_rate: int
+    audio_num_sample: int
     latent_downsample_rate: int = 2
 
     # visual
@@ -18,7 +19,6 @@ class SequenceConfig:
     sync_num_frames_per_segment: int = 16
     sync_step_size: int = 8
     sync_downsample_rate: int = 2
-    audio_feature_dur: float = 2.0
 
     @property
     def num_audio_frames(self) -> int:
@@ -43,11 +43,11 @@ class SequenceConfig:
 
     @property
     def audio_seq_len(self) -> int:
-        return math.ceil(audio_feature_dur * self.sampling_rate / self.sync_downsample_rate / self.spectrogram_frame_rate)
+        return math.ceil(self.audio_num_sample / self.sync_downsample_rate / self.spectrogram_frame_rate)
 
 
-CONFIG_16K = SequenceConfig(duration=8.0, sampling_rate=16000, spectrogram_frame_rate=256)
-CONFIG_44K = SequenceConfig(duration=8.0, sampling_rate=44100, spectrogram_frame_rate=512)
+CONFIG_16K = SequenceConfig(duration=8.0, sampling_rate=16000, spectrogram_frame_rate=256, audio_num_sample=32768)
+CONFIG_44K = SequenceConfig(duration=8.0, sampling_rate=44100, spectrogram_frame_rate=512, audio_num_sample=89088)
 
 if __name__ == '__main__':
     assert CONFIG_16K.latent_seq_len == 250

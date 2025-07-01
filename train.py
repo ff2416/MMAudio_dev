@@ -20,6 +20,7 @@ from mmaudio.sample import sample
 from mmaudio.utils.dist_utils import info_if_rank_zero, local_rank, world_size
 from mmaudio.utils.logger import TensorboardLogger
 from mmaudio.utils.synthesize_ema import synthesize_ema
+import tqdm
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -107,6 +108,7 @@ def train(cfg: DictConfig):
     eval_rng_clone = trainer.rng.graphsafe_get_state()
 
     # load previous checkpoint if needed
+    # cfg['checkpoint'] = '/project/llmsvgen/pengjun/MMAudio_dev/output/attn_pool_global/attn_pool_global_ckpt_200000.pth'
     if cfg['checkpoint'] is not None:
         curr_iter = trainer.load_checkpoint(cfg['checkpoint'])
         cfg['checkpoint'] = None
@@ -129,7 +131,7 @@ def train(cfg: DictConfig):
     total_epoch = math.ceil(total_iterations / len(loader))
     current_epoch = curr_iter // len(loader)
     info_if_rank_zero(log, f'We will approximately use {total_epoch} epochs.')
-
+    progress_bar = tqdm.tqdm(total=total_iterations-curr_iter, desc="Steps")
     # training loop
     try:
         # Need this to select random bases in different workers
@@ -144,7 +146,7 @@ def train(cfg: DictConfig):
             trainer.log.data_timer.start()
             for data in loader:
                 trainer.train_pass(data, curr_iter)
-
+                progress_bar.update(1)
                 if (curr_iter + 1) % cfg.val_interval == 0:
                     # swap into a eval rng state, i.e., use the same seed for every validation pass
                     train_rng_snapshot = trainer.rng.graphsafe_get_state()
@@ -197,8 +199,8 @@ def train(cfg: DictConfig):
         log.info(f'Synthesized EMA saved to {save_dir}!')
     distributed.barrier()
 
-    log.info(f'Evaluation: {eval_cfg}')
-    sample(eval_cfg)
+    # log.info(f'Evaluation: {eval_cfg}')
+    # sample(eval_cfg)
 
     # clean-up
     log.complete()

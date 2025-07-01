@@ -17,7 +17,8 @@ class MLP(nn.Module):
 
     def __init__(
         self,
-        dim: int,
+        in_dim: int,
+        out_dim: int, 
         hidden_dim: int,
         multiple_of: int = 256,
     ):
@@ -39,9 +40,9 @@ class MLP(nn.Module):
         hidden_dim = int(2 * hidden_dim / 3)
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
 
-        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
-        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.w1 = nn.Linear(in_dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, out_dim, bias=False)
+        self.w3 = nn.Linear(in_dim, hidden_dim, bias=False)
 
     def forward(self, x):
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
@@ -93,3 +94,30 @@ class ConvMLP(nn.Module):
 
     def forward(self, x):
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
+
+
+class Attn_Net_Gated(nn.Module):
+    def __init__(self, hidden_dim):
+        super().__init__()
+
+        self.attention = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+        self.gate = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+
+        attn_scores = self.attention(x)  # (B, T, 1)
+        gate_values = self.gate(x)  # (B, T, D)
+        gated_attn = attn_scores * gate_values  # (B, T, 1)
+        
+        attn_weights = F.softmax(gated_attn, dim=1)  # (B, T, 1)
+        pooled = torch.sum(attn_weights * x, dim=1)  # (B, D)
+        
+        return pooled

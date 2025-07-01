@@ -156,8 +156,7 @@ class VGGSound(Dataset):
         if audio_chunk.shape[0] < self.expected_audio_length:
             raise RuntimeError(f'Audio too short {video_id}')
         audio_chunk = audio_chunk[:self.expected_audio_length]
-        start_index = random.randint(0, self.num_samples - self.num_timbre_sample)
-        timbre_sample = audio_chunk[start_index:start_index + self.num_timbre_sample]
+        timbre_sample = audio_chunk[audio_chunk.shape[0]-self.num_timbre_sample:]        
 
         # truncate the video
         clip_chunk = clip_chunk[:self.clip_expected_length]

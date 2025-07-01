@@ -81,6 +81,7 @@ def generate(
     clip_video: Optional[torch.Tensor],
     sync_video: Optional[torch.Tensor],
     text: Optional[list[str]],
+    audio: Optional[torch.Tensor],
     *,
     negative_text: Optional[list[str]] = None,
     feature_utils: FeaturesUtils,
@@ -125,13 +126,30 @@ def generate(
     else:
         negative_text_features = net.get_empty_string_sequence(bs)
 
+    if audio is None:
+        audio_features = net.get_empty_audio_sequence(bs)
+    else:
+        if len(audio.shape) == 1:
+            audio = audio.cuda().unsqueeze(0)
+            audio = audio.repeat(bs, 1)
+        else:
+            audio = audio.cuda()
+        feature_utils_audio = feature_utils.to(device, torch.float32).eval()
+        dist = feature_utils_audio.encode_audio(audio)
+        audio_mean = dist.mean.detach().cuda().transpose(1, 2)
+        audio_std = dist.std.detach().cuda().transpose(1, 2)
+        randn = torch.empty_like(audio_mean).normal_(generator=rng)
+        audio_features = audio_mean + audio_std * randn
+        audio_features = audio_features.to(device, dtype, non_blocking=True)
+        feature_utils = feature_utils.to(device, dtype).eval()
+
     x0 = torch.randn(bs,
                      net.latent_seq_len,
                      net.latent_dim,
                      device=device,
                      dtype=dtype,
                      generator=rng)
-    preprocessed_conditions = net.preprocess_conditions(clip_features, sync_features, text_features)
+    preprocessed_conditions = net.preprocess_conditions(clip_features, sync_features, text_features, audio_features)
     empty_conditions = net.get_empty_conditions(
         bs, negative_text_features=negative_text_features if negative_text is not None else None)
 

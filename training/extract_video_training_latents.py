@@ -21,12 +21,12 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 # for the 16kHz model
-SAMPLING_RATE = 16000
-DURATION_SEC = 8.0
-NUM_SAMPLES = 128000
-vae_path = './ext_weights/v1-16.pth'
-bigvgan_path = './ext_weights/best_netG.pt'
-mode = '16k'
+# SAMPLING_RATE = 16000
+# DURATION_SEC = 8.0
+# NUM_SAMPLES = 128000
+# vae_path = './ext_weights/v1-16.pth'
+# bigvgan_path = './ext_weights/best_netG.pt'
+# mode = '16k'
 
 # for the 44.1kHz model
 """
@@ -34,42 +34,42 @@ NOTE: 352800 (8*44100) is not divisible by (STFT hop size * VAE downsampling rat
 353280 is the next integer divisible by 1024.
 """
 
-# SAMPLING_RATE = 44100
-# DURATION_SEC = 8.0
-# NUM_SAMPLES = 353280
-# vae_path = './ext_weights/v1-44.pth'
-# bigvgan_path = None
-# mode = '44k'
+SAMPLING_RATE = 44100
+DURATION_SEC = 8.0
+NUM_SAMPLES = 353282
+vae_path = './ext_weights/v1-44.pth'
+bigvgan_path = None
+mode = '44k'
 
 synchformer_ckpt = './ext_weights/synchformer_state_dict.pth'
 
 # per-GPU
-BATCH_SIZE = 16
-NUM_WORKERS = 16
+BATCH_SIZE = 8
+NUM_WORKERS = 8
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 # uncomment the train/test/val sets to extract latents for them
 data_cfg = {
-    'example': {
-        'root': './training/example_videos',
-        'subset_name': './training/example_video.tsv',
-        'normalize_audio': True,
-    },
-    # 'train': {
-    #     'root': '../data/video',
-    #     'subset_name': './sets/vgg3-train.tsv',
+    # 'example': {
+    #     'root': './training/example_videos',
+    #     'subset_name': './training/example_video.tsv',
     #     'normalize_audio': True,
     # },
+    'train': {
+        'root': '/project/llmsvgen/share/data_vggsound/dataset/scratch/shared/beegfs/hchen/train_data/VGGSound_final/video',
+        'subset_name': '/project/llmsvgen/pengjun/MMAudio_dev/tsv/vgg-train-filtered-3.tsv',
+        'normalize_audio': True,
+    },
     # 'test': {
-    #     'root': '../data/video',
-    #     'subset_name': './sets/vgg3-test.tsv',
+    #     'root': '/project/llmsvgen/share/data_vggsound/dataset/scratch/shared/beegfs/hchen/train_data/VGGSound_final/video',
+    #     'subset_name': '/project/llmsvgen/pengjun/MMAudio_dev/tsv/vgg-test.tsv',
     #     'normalize_audio': False,
     # },
     # 'val': {
-    #     'root': '../data/video',
-    #     'subset_name': './sets/vgg3-val.tsv',
+    #     'root': '/project/llmsvgen/share/data_vggsound/dataset/scratch/shared/beegfs/hchen/train_data/VGGSound_final/video',
+    #     'subset_name': '/project/llmsvgen/pengjun/MMAudio_dev/tsv/vgg-val.tsv',
     #     'normalize_audio': False,
     # },
 }
@@ -109,8 +109,8 @@ def extract():
     parser = ArgumentParser()
     parser.add_argument('--latent_dir',
                         type=Path,
-                        default='./training/example_output/video-latents')
-    parser.add_argument('--output_dir', type=Path, default='./training/example_output/memmap')
+                        default='./training/vgg-filtered/video-latents')
+    parser.add_argument('--output_dir', type=Path, default='./training/vgg-filtered-3/memmap')
     args = parser.parse_args()
 
     latent_dir = args.latent_dir
@@ -133,7 +133,6 @@ def extract():
         dataset, loader = setup_dataset(split)
         log.info(f'Number of samples: {len(dataset)}')
         log.info(f'Number of batches: {len(loader)}')
-
         for curr_iter, data in enumerate(tqdm(loader)):
             output = {
                 'id': data['id'],
@@ -146,9 +145,9 @@ def extract():
             output['std'] = dist.std.detach().cpu().transpose(1, 2)
 
             timbre_sample = data['timbre_sample'].cuda()
-            dist = feature_extractor.encode_audio(audio)
-            output['audio_feature_mean'] = dist.mean.detach().cpu().transpose(1, 2)
-            output['audio_feature_std'] = dist.std.detach().cpu().transpose(1, 2)
+            dist1 = feature_extractor.encode_audio(timbre_sample)
+            output['audio_feature_mean'] = dist1.mean.detach().cpu().transpose(1, 2)
+            output['audio_feature_std'] = dist1.std.detach().cpu().transpose(1, 2)
 
             clip_video = data['clip_video'].cuda()
             clip_features = feature_extractor.encode_video_with_clip(clip_video)

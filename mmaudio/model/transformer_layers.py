@@ -93,7 +93,7 @@ class MMDitSingleBlock(nn.Module):
             self.norm2 = nn.LayerNorm(dim, elementwise_affine=False)
 
             if kernel_size == 1:
-                self.ffn = MLP(dim, int(dim * mlp_ratio))
+                self.ffn = MLP(dim, dim, int(dim * mlp_ratio))
             else:
                 self.ffn = ConvMLP(dim,
                                    int(dim * mlp_ratio),

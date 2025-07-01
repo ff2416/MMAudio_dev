@@ -35,10 +35,10 @@ class ExtractedAudio(Dataset):
         self.mean = td['mean']
         self.std = td['std']
         self.text_features = td['text_features']
-        rng = torch.Generator(device=self.clip_features.device)
+        rng = torch.Generator(device=self.text_features.device)
         rng.manual_seed(42)
-        randn = torch.empty_like(a_mean).normal_(generator=rng)
-        self.audio_features = td['audio_mean'] + td['audio_std'] * randn
+        randn = torch.empty_like(td['audio_feature_mean']).normal_(generator=rng)
+        self.audio_features = td['audio_feature_mean'] + td['audio_feature_std'] * randn
 
         log.info(f'Loaded {len(self)} samples from {premade_mmap_dir}.')
         log.info(f'Loaded mean: {self.mean.shape}.')
@@ -62,6 +62,7 @@ class ExtractedAudio(Dataset):
                                               self.data_dim['sync_dim'])
         self.video_exist = torch.tensor(0, dtype=torch.bool)
         self.text_exist = torch.tensor(1, dtype=torch.bool)
+        self.audio_exist = torch.tensor(1, dtype=torch.bool)
 
     def compute_latent_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         latents = self.mean
@@ -88,6 +89,7 @@ class ExtractedAudio(Dataset):
             'caption': self.df_list[idx]['caption'],
             'video_exist': self.video_exist,
             'text_exist': self.text_exist,
+            'audio_exist': self.audio_exist,
         }
         return data
 
